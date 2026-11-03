@@ -1,0 +1,25 @@
+# Local inputs and all imagery derived from them
+/images/*
+!/images/.gitkeep
+/generated/
+/validation/
+/dist/
+/build/
+/.build/
+/.venv/
+/.vscode/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.spec
+*.log
+*.tmp
+*.tif
+*.tiff
+*.zip
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

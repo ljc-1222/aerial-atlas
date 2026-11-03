@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a reproducible problem using synthetic data
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach private images, generated maps, real-image screenshots or unsanitized logs. Prefer the --demo example.
+  - type: input
+    id: environment
+    attributes:
+      label: Version and environment
+      description: Application version, Windows version, portable or source installation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Actual behavior and sanitized error
+      description: Include the failing stage and whether the synthetic demo works.
+    validations:
+      required: true
