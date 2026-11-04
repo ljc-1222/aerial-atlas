@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from zipfile import ZipFile
 
@@ -67,7 +68,34 @@ def verify():
         if not (report["status"] == "passed" and report["frozen"] and report["tkinter"]
                 and report["tiles"] == 14 and report["reference_rgb_sha256"] == expected_rgb):
             raise ValueError("Native reconstruction or rendering failed")
-        print("Windows release verified: ZIP, file hashes, native reconstruction, Tk and RGB rendering")
+        sys.path.insert(0, str(ROOT / "tests"))
+        from support import survey_downloads
+
+        surveys = work / "downloaded surveys"
+        reference = Image.new("RGB", (1024, 1024), (128, 128, 128))
+        reference.paste((0, 0, 0), (0, 0, 1024, 256))
+        expected_rgb = hashlib.sha256(reference.tobytes()).hexdigest()
+        for survey in ("1150618", "1150806"):
+            source_tiff = survey_downloads(surveys, survey)
+            original_hash = sha256(source_tiff)
+            command = [str(exe), "--project-dir", str(surveys), "--data-dir", str(surveys / "images"),
+                       "--dataset", survey, "--settings-path", str(work / "survey-settings.json")]
+            subprocess.run([*command, "--build"], cwd=work, env=env, check=True, timeout=120)
+            result = work / f"runtime-{survey}.json"
+            subprocess.run([*command, "--tile", "0_0", "--self-test-report", str(result)],
+                           cwd=work, env=env, check=True, timeout=60)
+            report = json.loads(result.read_text())
+            if not (report["status"] == "passed" and report["frozen"] and report["tkinter"]
+                    and report["tiles"] == 2 and report["tile"] == "00_00"
+                    and report["extent"] == [1536, 1280]
+                    and report["reference_rgb_sha256"] == expected_rgb):
+                raise ValueError(f"Native survey import, uint16 RGB or Alpha failed: {survey}")
+            generated = surveys / "generated" / survey
+            if sha256(source_tiff) != original_hash or any(
+                path.suffix.lower() in (".tif", ".tiff") for path in generated.rglob("*")
+            ):
+                raise ValueError(f"Source TIFF was changed or copied: {survey}")
+        print("Windows release verified: ZIP, file hashes, all three surveys, Tk, uint16 RGB and Alpha")
 
 
 if __name__ == "__main__":

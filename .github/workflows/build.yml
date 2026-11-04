@@ -67,4 +67,4 @@ jobs:
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
           --title "Aerial Atlas $RELEASE_TAG"
-          --notes "Windows x64 portable application. Extract the complete ZIP and run AerialAtlas.exe. Place your tiles in images/1150427/RGB_png. No Python installation is required; the dataset is not included."
+          --notes "Windows x64 portable application for the April, June and August surveys. Extract the complete ZIP and run AerialAtlas.exe. Download survey ZIPs and source TIFFs into images, or choose their download folder in the app; extraction is automatic and April RGB filenames are preserved. No Python installation is required; datasets are not included."
