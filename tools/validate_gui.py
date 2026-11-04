@@ -46,6 +46,62 @@ def capture(root,path):
             time.sleep(.1)
 
 
+def check_survey_picker(viewer):
+    from aerial_atlas.viewer_preferences import THEMES
+    root, picker = viewer.root, viewer.survey_picker
+    original = viewer.preferences.language, viewer.preferences.theme, root.geometry()
+    selected, command = picker.variable.get(), picker.command
+    calls = []
+    try:
+        picker.command = calls.append
+        root.geometry("960x640")
+        for language in ("en", "zh-TW"):
+            for theme in ("light", "dark"):
+                viewer.preferences.language, viewer.preferences.theme = language, theme
+                viewer._apply_theme()
+                viewer._apply_language()
+                root.update()
+                assert picker.buttons[selected].instate(["selected"])
+                for button in picker.buttons.values():
+                    assert button.winfo_class() == "TRadiobutton"
+                    assert button.winfo_width() >= button.winfo_reqwidth(), "Survey button clipped"
+                    assert button.winfo_rootx() + button.winfo_width() <= root.winfo_rootx() + root.winfo_width()
+                assert viewer.style.lookup("Survey.TRadiobutton", "background", ("selected",)) == THEMES[theme]["accent"]
+        button = picker.buttons[selected]
+        button.focus_force()
+        root.update()
+        button.event_generate("<Right>")
+        root.update()
+        assert calls and calls[-1] != selected, "Arrow key did not select the next survey"
+        picker.buttons[picker.variable.get()].event_generate("<Return>")
+        root.update()
+        assert len(calls) == 2, "Enter did not activate the focused survey"
+        picker.select("1150427")
+        picker.buttons["1150806"].focus_force()
+        root.update()
+        picker.buttons["1150806"].event_generate("<Right>")
+        root.update()
+        assert len(calls) == 3 and calls[-1] == "1150427", "Arrow key ignored the focused date"
+        picker.buttons["1150427"].event_generate("<KeyPress-space>")
+        picker.buttons["1150427"].event_generate("<KeyRelease-space>")
+        root.update()
+        assert len(calls) == 4, "Space did not activate the focused survey"
+        picker.set_busy(True)
+        for button in picker.buttons.values():
+            button.invoke()
+        assert len(calls) == 4, "Busy survey selector accepted input"
+    finally:
+        picker.command = command
+        picker.select(selected)
+        picker.set_busy(False)
+        viewer.preferences.language, viewer.preferences.theme = original[:2]
+        viewer._apply_theme()
+        viewer._apply_language()
+        root.geometry(original[2])
+        root.update()
+        viewer.entry.focus_set()
+
+
 def check_surveys(project, errors):
     sys.path.insert(0, str(ROOT / "tests"))
     from support import survey_downloads
@@ -59,8 +115,7 @@ def check_surveys(project, errors):
 
     def switch(id):
         previous = args.switch_dataset.__self__
-        previous.viewer.survey_combo.current(("1150427", "1150618", "1150806").index(id))
-        previous.viewer.survey_combo.event_generate("<<ComboboxSelected>>")
+        previous.viewer.survey_picker.buttons[id].invoke()
         pump(root, lambda: args.switch_dataset.__self__ is not previous)
         current = args.switch_dataset.__self__
         pump(root, lambda: not current.scan_running)
@@ -73,6 +128,7 @@ def check_surveys(project, errors):
 
     try:
         pump(root, lambda: app.opened and app.viewer.detail_updates > 0)
+        check_survey_picker(app.viewer)
         app.viewer.locate_text("2_2")
         april = app.viewer.capture_view()
         june = switch("1150618")
@@ -100,6 +156,36 @@ def check_surveys(project, errors):
                 pump(root, lambda: not active.scan_running)
         except tk.TclError:
             pass
+
+
+def check_close_during_survey_switch(project, errors):
+    args = parser().parse_args(["--project-dir", str(project), "--dataset", "1150427",
+                                "--settings-path", str(project / "settings.json")])
+    root = tk.Tk()
+    root.report_callback_exception = lambda *error: errors.append(str(error))
+    app = Startup(root, args, source_dir(project), output_dir(project), project / "logs")
+    released, closed = threading.Event(), threading.Event()
+    try:
+        pump(root, lambda: app.opened and app.viewer.detail_updates > 0)
+        worker = app.viewer.worker
+        alive = worker.is_alive
+        with patch.object(worker, "is_alive", side_effect=lambda: not released.is_set() or alive()):
+            app.viewer.survey_picker.buttons["1150618"].invoke()
+            root.update()
+            notice = root.winfo_children()[0]
+            message = notice.winfo_children()[0].winfo_children()[0].cget("text")
+            assert "2026-06-18" in message, "Switching feedback is missing"
+            assert args.switch_dataset.__self__ is app
+            root.bind("<Destroy>", lambda event: closed.set() if event.widget == root else None)
+            root.tk.call(root.protocol("WM_DELETE_WINDOW"))
+            assert app.closing and root.winfo_exists()
+            released.set()
+            pump(root, closed.is_set)
+            assert not alive(), "Reader survived switch cancellation"
+    finally:
+        released.set()
+        if not closed.is_set():
+            app.close()
 
 
 def check_reopen_and_import_close(errors):
@@ -180,6 +266,13 @@ def main():
             pump(root,lambda: not app.scan_running)
             assert app.primary.instate(["disabled"])
             assert app.message_key=="missing"
+            assert all(not button.instate(["disabled"]) for button in app.survey_picker.buttons.values())
+            app.survey_picker.buttons["1150618"].invoke()
+            pump(root, lambda: not app.scan_running)
+            assert not app.data_button.instate(["disabled"]), "Missing survey blocked folder selection"
+            app.survey_picker.buttons["1150427"].invoke()
+            pump(root, lambda: not app.scan_running)
+            args.tile = "2_2"
             # Both themes, translated strings and smaller preparation-window layout.
             app.theme.set("dark"); app.update_appearance()
             app.language.set("zh-TW"); app.update_appearance()
@@ -200,7 +293,7 @@ def main():
             assert not app.primary.instate(["disabled"])
             # Synthetic-only public preparation screenshot.
             original_source,original_output=app.source_path.cget("text"),app.output_path.cget("text")
-            app.source_path.configure(text="aerial-atlas / images / 1150427 / RGB_png")
+            app.source_path.configure(text="aerial-atlas / images / 1150427 / tiles_png_1024")
             app.output_path.configure(text="aerial-atlas / generated / 1150427")
             if options.screenshots:
                 capture(root,options.screenshots/"preparation.png")
@@ -276,7 +369,12 @@ def main():
             viewer.close()
         finally:
             try:
-                if root.winfo_exists(): app.close(); root.update()
+                if root.winfo_exists():
+                    if app.opened:
+                        app.viewer.close()
+                    else:
+                        app.close()
+                        root.update()
             except tk.TclError: pass
         # Reopening uses exactly the previous camera and selected tile.
         args.tile=None
@@ -290,15 +388,22 @@ def main():
             viewer.close()
         finally:
             try:
-                if root.winfo_exists(): app.close(); root.update()
+                if root.winfo_exists():
+                    if app.opened:
+                        app.viewer.close()
+                    else:
+                        app.close()
+                        root.update()
             except tk.TclError: pass
         assert not errors,errors
         check_surveys(project, errors)
+        check_close_during_survey_switch(project, errors)
         check_reopen_and_import_close(errors)
         assert not errors, errors
     atomic_json(ROOT/"validation/gui.json",dict(status="passed",missing_data=True,preparation_themes=True,
         high_dpi_layout=True,native_call_cancelled=True,gui_build=True,lookup_context=1.5,settings=True,
         exact_view_restored=True,survey_switching=True,download_import=True,
+        survey_picker_keyboard=True,survey_picker_themes=True,switch_close=True,
         external_map_reopened=True,import_close_waits=True,callback_errors=errors))
     print("GUI checks passed")
 

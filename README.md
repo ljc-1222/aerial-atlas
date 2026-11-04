@@ -27,7 +27,10 @@ aerial-atlas/
     ...
 ```
 
-Open the application, select a **Survey**, and choose **Create map** once.
+Open the application, choose a date under **Survey**, and choose **Create map** once.
+The highlighted date is selected. Each date shows whether it is **Prepared**,
+**Downloaded**, or still needs files; a missing survey remains selectable so
+you can choose its download folder.
 The app extracts recognized imagery and arranges each date under
 `images/<survey>/tiles_png_1024/`. An existing April `RGB_png` folder is adapted
 automatically; its original image filenames and pixels stay unchanged.
@@ -46,7 +49,9 @@ interrupted imports can be retried.
 - Drag to pan, use the mouse wheel to zoom, and press Home to fit the map.
 - Open Settings to change language, appearance or display options. The Help menu
   lists keyboard shortcuts.
-- Switch surveys from the selector at the top. Each survey remembers its view.
+- Choose a date at the top to switch surveys. Each survey remembers its view.
+  Tab focuses the date buttons; Left/Right changes dates, and Enter or Space selects.
+  A loading message appears while switching, and the window can still be closed.
 
 The viewer uses image pixel coordinates. Survey metadata retains any source
 georeferencing; switching dates does not align their views geographically.

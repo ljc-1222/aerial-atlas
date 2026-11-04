@@ -15,8 +15,9 @@ import uuid
 
 from . import __version__
 from .viewer_preferences import SettingsStore, THEMES, system_theme
-from .datasets import DATASET_IDS, find_dataset, prepare_downloads, resolve_data_root
+from .datasets import DATASET_IDS, find_dataset, prepare_downloads, resolve_data_root, survey_states, survey_date
 from .paths import output_dir
+from .survey_ui import SurveySelector
 
 TEXT = {
     "en": {
@@ -114,13 +115,9 @@ class Startup:
         self.intro.pack(anchor="w")
         surveys = ttk.Frame(outer)
         surveys.pack(fill="x", pady=(20, 0))
-        self.survey_label = ttk.Label(surveys, style="Muted.TLabel")
-        self.survey_label.pack(side="left", padx=(0, 10))
-        labels = [f"{int(id[:3])+1911}-{id[3:5]}-{id[5:]}" for id in DATASET_IDS]
-        self.survey_combo = ttk.Combobox(surveys, values=labels, state="readonly", width=14)
-        self.survey_combo.current(DATASET_IDS.index(args.dataset))
-        self.survey_combo.pack(side="left")
-        self.survey_combo.bind("<<ComboboxSelected>>", self.select_dataset)
+        self.survey_picker = SurveySelector(surveys, args.dataset, self.select_dataset,
+                                            language=self.preferences.language, states=getattr(args, "survey_states", None))
+        self.survey_picker.pack(side="left")
         self.data_button = ttk.Button(surveys, command=self.choose_data_folder)
         self.data_button.pack(side="right")
         self.locations = ttk.Frame(outer, padding=(20, 18), style="Panel.TFrame")
@@ -223,7 +220,8 @@ class Startup:
         self.output_label.configure(text=self.tr("output"))
         self.footer.configure(text=self.tr("note"))
         self.folder.configure(text=self.tr("folder"))
-        self.survey_label.configure(text=self.tr("survey"))
+        self.survey_picker.set_language(self.preferences.language)
+        self.survey_picker.set_colors(colors)
         self.data_button.configure(text=self.tr("choose"))
         self.existing.configure(text=self.tr("existing"))
         self.primary.configure(text=self.tr("rebuild" if self.info else "build"))
@@ -240,10 +238,10 @@ class Startup:
         self.status.configure(text=self.tr(key, **values) if key in TEXT["en"] else key)
         self.request_layout()
 
-    def select_dataset(self, _event=None):
-        if self.scan_running or self.process:
+    def select_dataset(self, id):
+        if self.scan_running or self.process or id == self.args.dataset:
             return
-        self.args.dataset = DATASET_IDS[self.survey_combo.current()]
+        self.args.dataset = id
         self.args.source = self.args.image = self.args.index = self.args.tile = None
         self.auto_select = False
         self.info = None
@@ -264,7 +262,7 @@ class Startup:
         if self.scan_running or self.process:
             return
         self.scan_running = True
-        self.survey_combo.configure(state="disabled")
+        self.survey_picker.set_busy(True)
         self.data_button.state(["disabled"])
         self.primary.state(["disabled"])
         self.secondary.state(["disabled"])
@@ -301,6 +299,7 @@ class Startup:
                     self.source = (self.args.source or dataset.tiles).resolve()
                     self.output = output_dir(self.args.project_dir, self.args.dataset)
                     self.orthomosaic, self.index_base = dataset.image, dataset.index_base
+                self.args.survey_states = survey_states(self.args.project_dir, self.data_root)
                 prepared = True
                 if self.args.image:
                     from .raster import inspect_raster
@@ -313,6 +312,7 @@ class Startup:
                     return
             except Exception as error:
                 issue = str(error)
+                self.args.survey_states = survey_states(self.args.project_dir, self.data_root)
                 if self.closing or not prepared:
                     self.mailbox.put(("error", (None, issue)))
                     return
@@ -348,7 +348,7 @@ class Startup:
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL, **options)
             self.primary.state(["disabled"])
-            self.survey_combo.configure(state="disabled")
+            self.survey_picker.set_busy(True)
             self.data_button.state(["disabled"])
             self.existing.pack_forget()
             self.secondary.configure(text=self.tr("cancel"), command=self.cancel)
@@ -376,8 +376,9 @@ class Startup:
         try:
             kind, value = self.mailbox.get_nowait()
             self.scan_running = False
-            self.survey_combo.current(DATASET_IDS.index(self.args.dataset))
-            self.survey_combo.configure(state="disabled" if self.args.image else "readonly")
+            self.survey_picker.select(self.args.dataset)
+            self.survey_picker.set_states(self.args.survey_states)
+            self.survey_picker.set_busy(bool(self.args.image))
             self.data_button.state(["!disabled"])
             self.source_path.configure(text=str(self.source))
             self.output_path.configure(text=str(self.output))
@@ -465,7 +466,7 @@ class Startup:
                 self.cancel_file.unlink(missing_ok=True)
                 self.secondary.configure(text=self.tr("check"), command=self.scan)
                 self.secondary.state(["!disabled"])
-                self.survey_combo.configure(state="readonly")
+                self.survey_picker.set_busy(False)
                 self.data_button.state(["!disabled"])
                 if self.closing:
                     self._destroy()
@@ -529,6 +530,8 @@ class Startup:
     def switch_dataset(self, id):
         if id == self.args.dataset:
             return
+        notice_text = self.viewer.tr("switching_survey", date=survey_date(id))
+        self.viewer.survey_picker.set_busy(True)
         self.viewer.close(destroy_root=False)
         self.args.dataset = id
         self.args.dataset_explicit = True
@@ -539,10 +542,29 @@ class Startup:
             self.root.unbind(binding)
         for child in self.root.winfo_children():
             child.destroy()
+        notice = ttk.Frame(self.root)
+        notice.pack(fill="both", expand=True)
+        center = ttk.Frame(notice)
+        center.place(relx=.5, rely=.5, anchor="center")
+        ttk.Label(center, text=notice_text, font=("Segoe UI", 14)).pack(pady=(0, 16))
+        progress = ttk.Progressbar(center, mode="indeterminate", length=260)
+        progress.pack()
+        progress.start(15)
+
+        def close_switch():
+            self.closing = True
+            self.root.withdraw()
+
+        self.root.protocol("WM_DELETE_WINDOW", close_switch)
 
         def reopen():
             if self.viewer.worker.is_alive():
                 self.root.after(25, reopen)
+                return
+            progress.stop()
+            notice.destroy()
+            if self.closing:
+                self._destroy()
                 return
             Startup(self.root, self.args, self.data_root / id / "tiles_png_1024",
                     output_dir(self.args.project_dir, id), self.logs)

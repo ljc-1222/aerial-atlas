@@ -30,6 +30,8 @@ THEMES = {
 STRINGS = {
     "zh-TW": {
         "app": "航測圖台", "view": "檢視", "settings": "設定", "help": "說明", "survey": "航次",
+        "survey_prepared": "已建立", "survey_available": "已下載", "survey_missing": "缺少資料",
+        "survey_invalid": "請檢查檔案", "switching_survey": "正在開啟 {date}…",
         "search": "圖幅瀏覽", "search_hint": "搜尋編號或檔名，例如 30_35", "locate": "定位",
         "tile_ids": "編號", "row_filter": "依列瀏覽", "all_tiles": "全部圖幅",
         "row_option": "第 {row:02} 列", "previous_tile": "‹ 上一張", "next_tile": "下一張 ›",
@@ -67,6 +69,8 @@ STRINGS = {
     },
     "en": {
         "app": "Aerial Atlas", "view": "View", "settings": "Settings", "help": "Help", "survey": "Survey",
+        "survey_prepared": "Prepared", "survey_available": "Downloaded", "survey_missing": "Missing files",
+        "survey_invalid": "Check files", "switching_survey": "Opening {date}…",
         "search": "Browse tiles", "search_hint": "Search ID or filename, e.g. 30_35", "locate": "Locate",
         "tile_ids": "Tile ID", "row_filter": "Browse row", "all_tiles": "All tiles",
         "row_option": "Row {row:02}", "previous_tile": "‹ Previous", "next_tile": "Next ›",

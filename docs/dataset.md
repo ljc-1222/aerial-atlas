@@ -6,6 +6,12 @@ Preparation automatically extracts recognized imagery. Original ZIPs are kept,
 existing different files are never overwritten, and interrupted imports can be
 retried. Training splits, annotation JSON and semantic masks are left alone.
 
+The date buttons show the selected survey and a short status: **Prepared** means
+a saved map/index exists; **Downloaded** means source tiles and the required TIFF
+are available to prepare; **Missing files** and **Check files** lead to setup or
+error recovery. These are quick hints; files are checked again before opening.
+Missing surveys stay selectable so their download folder can be chosen.
+
 ## Shared layout
 
 ```text

@@ -6,7 +6,7 @@ from unittest.mock import patch
 import zipfile
 
 from aerial_atlas.datasets import (DATASET_IDS, find_dataset, prepare_downloads,
-                                   resolve_data_root)
+                                   resolve_data_root, survey_date, survey_states)
 
 
 def download(root, members, name="download.zip"):
@@ -22,6 +22,34 @@ class DatasetTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="atlas downloads ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_survey_states_distinguish_missing_downloaded_and_prepared_data(self):
+        project, inputs = self.root / "app", self.root / "downloads"
+        self.assertEqual(survey_states(project, inputs), dict.fromkeys(DATASET_IDS, "missing"))
+        april = inputs / "1150427/RGB_png"
+        april.mkdir(parents=True)
+        (april / "20260427_nodata_01_01.png").write_bytes(b"image")
+        june = inputs / "1150618/tiles_png_1024"
+        june.mkdir(parents=True)
+        (june / "1150618_tile_0_0.png").write_bytes(b"image")
+        self.assertEqual(survey_states(project, inputs)["1150427"], "available")
+        self.assertEqual(survey_states(project, inputs)["1150618"], "missing")
+        (inputs / "1150618_input_orthomosaic-001.tif").write_bytes(b"source")
+        self.assertEqual(survey_states(project, inputs)["1150618"], "available")
+        cached = project / "generated/1150618/current.json"
+        cached.parent.mkdir(parents=True)
+        cached.write_text("{}")
+        self.assertEqual(survey_states(project, inputs)["1150618"], "prepared")
+        self.assertEqual([survey_date(id) for id in DATASET_IDS], ["2026-04-27", "2026-06-18", "2026-08-06"])
+
+    def test_survey_state_reports_conflicts_without_modifying_sources(self):
+        for name in ("RGB_png", "tiles_png_1024"):
+            folder = self.root / "1150427" / name
+            folder.mkdir(parents=True)
+            (folder / "original.png").write_bytes(name.encode())
+        before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*.png")}
+        self.assertEqual(survey_states(self.root / "app", self.root)["1150427"], "invalid")
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*.png")})
 
     def test_legacy_directory_keeps_original_names_bytes_and_annotations(self):
         source = self.root / "1150427/RGB_png"

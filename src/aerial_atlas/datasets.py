@@ -17,6 +17,27 @@ DATASET_IDS = ("1150427", "1150618", "1150806")
 CHUNK = 1024 * 1024
 
 
+def survey_date(id: str) -> str:
+    return f"{int(id[:3]) + 1911}-{id[3:5]}-{id[5:]}"
+
+
+def survey_states(project: Path, data_root: Path) -> dict[str, str]:
+    states = {}
+    for id in DATASET_IDS:
+        try:
+            dataset = find_dataset(data_root, id)
+            if (project / "generated" / id / "current.json").is_file():
+                states[id] = "prepared"
+            elif (dataset.tiles.is_dir() and any(p.suffix.lower() == ".png" for p in dataset.tiles.iterdir())
+                  and (dataset.index_base == 1 or dataset.image is not None)):
+                states[id] = "available"
+            else:
+                states[id] = "missing"
+        except (OSError, ValueError):
+            states[id] = "invalid"
+    return states
+
+
 @dataclass(frozen=True)
 class Dataset:
     id: str
