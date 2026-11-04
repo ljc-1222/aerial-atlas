@@ -44,7 +44,9 @@ def load_rgb(tile: Tile, check_hash: bool = False) -> np.ndarray:
     return pixels
 
 
-def inventory(source: Path, stride: int) -> list[Tile]:
+def inventory(source: Path, stride: int, index_base: int = 1) -> list[Tile]:
+    if index_base not in (0, 1):
+        raise ValueError("Grid index base must be 0 or 1")
     tiles = []
     prefixes = set()
     keys = set()
@@ -55,7 +57,7 @@ def inventory(source: Path, stride: int) -> list[Tile]:
         if match is None:
             raise ValueError(f"Cannot parse source name: {path.name}")
         prefix, row, col = match[1], int(match[2]), int(match[3])
-        if row < 1 or col < 1 or (row, col) in keys:
+        if row < index_base or col < index_base or (row, col) in keys:
             raise ValueError(f"Invalid or duplicate grid coordinate: {path.name}")
         prefixes.add(prefix)
         keys.add((row, col))
@@ -63,7 +65,7 @@ def inventory(source: Path, stride: int) -> list[Tile]:
             width, height = image.size
             if image.mode != "RGB" or not (stride < width <= stride * 2 and stride < height <= stride * 2):
                 raise ValueError(f"Unsupported source dimensions or mode: {path.name}")
-        tiles.append(Tile(path, row, col, width, height, (col - 1) * stride, (row - 1) * stride))
+        tiles.append(Tile(path, row, col, width, height, (col - index_base) * stride, (row - index_base) * stride))
     if not tiles or len(prefixes) != 1:
         raise ValueError("Expected a nonempty set of tiles from one filename prefix")
     return sorted(tiles, key=lambda tile: (tile.row, tile.col))

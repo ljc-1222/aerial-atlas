@@ -24,7 +24,6 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import numpy as np
 from PIL import Image, ImageTk
 import rasterio
-from rasterio.enums import Resampling
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.windows import Window
 import tkinter as tk
@@ -32,6 +31,7 @@ from tkinter import messagebox
 from .viewer_preferences import SettingsStore
 from .viewer_ui import ViewerUI
 from .viewer_navigation import ViewHistory, ViewState
+from .raster import read_display, validate_raster
 
 
 
@@ -62,7 +62,7 @@ class Tile:
 
 
 class TileIndex:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, extent: tuple[int, int] | None = None):
         with path.open(encoding="utf-8-sig", newline="") as stream:
             self.tiles = [Tile(row["filename"], *(int(row[key]) for key in ("row", "column", "x", "y", "width", "height"))) for row in csv.DictReader(stream)]
         if not self.tiles:
@@ -73,10 +73,16 @@ class TileIndex:
         self.by_position = {(tile.row, tile.column): tile for tile in self.tiles}
         if len(self.by_name) != len(self.tiles) or len(self.by_position) != len(self.tiles):
             raise ValueError("The tile index contains duplicate filenames or grid positions.")
-        if any(t.row < 1 or t.column < 1 or min(t.x,t.y) < 0 or min(t.width,t.height) < 1 for t in self.tiles):
+        if any(t.row < 0 or t.column < 0 or min(t.x,t.y) < 0 or min(t.width,t.height) < 1 for t in self.tiles):
             raise ValueError("The tile index contains invalid coordinates or dimensions.")
         self.width = max(tile.x + tile.width for tile in self.tiles)
         self.height = max(tile.y + tile.height for tile in self.tiles)
+        if extent is not None:
+            if len(extent) != 2 or any(not isinstance(value, int) or value < 1 for value in extent):
+                raise ValueError("Invalid raster extent.")
+            if self.width > extent[0] or self.height > extent[1]:
+                raise ValueError("Tile footprints extend outside the raster.")
+            self.width, self.height = extent
         self.rows = sorted({tile.row for tile in self.tiles})
 
     @staticmethod
@@ -314,11 +320,7 @@ def render_region(dataset, request: RenderRequest, pixel_limit: int) -> Image.Im
     if dx1 <= dx0 or dy1 <= dy0:
         return result
     region = Window(left, top, right - left, bottom - top)
-    rgb = dataset.read((1, 2, 3), window=region, out_shape=(3, dy1 - dy0, dx1 - dx0), resampling=Resampling.bilinear)
-    mask = dataset.dataset_mask(window=region, out_shape=(dy1 - dy0, dx1 - dx0), resampling=Resampling.nearest)
-    rgba = np.empty((dy1 - dy0, dx1 - dx0, 4), dtype=np.uint8)
-    rgba[:, :, :3] = rgb.transpose(1, 2, 0)
-    rgba[:, :, 3] = mask
+    rgba = read_display(dataset, region, (dy1 - dy0, dx1 - dx0))
     foreground = Image.fromarray(rgba)
     result.alpha_composite(foreground, (dx0, dy0))
     return result
@@ -379,7 +381,8 @@ class RenderWorker(threading.Thread):
             with warnings.catch_warnings(), rasterio.Env(GDAL_CACHEMAX=self.gdal_cache_mb * MIB, GDAL_NUM_THREADS="1"):
                 warnings.simplefilter("ignore", NotGeoreferencedWarning)
                 dataset = rasterio.open(self.path, "r", sharing=False)
-                if (dataset.width, dataset.height) != self.extent or dataset.count != 3:
+                validate_raster(dataset)
+                if (dataset.width, dataset.height) != self.extent:
                     raise ValueError("主圖尺寸或色彩通道與索引不一致。")
                 # A small, fixed-size navigation texture fills exposed regions
                 # during any pan/zoom, including jumps outside the last detail ROI.

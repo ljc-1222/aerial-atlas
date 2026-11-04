@@ -21,6 +21,7 @@ from rasterio.errors import NotGeoreferencedWarning
 from . import __version__
 from .paths import SCHEMA, atomic_json
 from .reconstruction import inventory, geometry, load_rgb, build_mosaic, verify_mosaic
+from .raster import inspect_raster
 
 MIB = 1024 * 1024
 STRIDE = 512
@@ -84,15 +85,21 @@ def estimate_bytes(extent: dict) -> int:
     return int(extent["width"] * extent["height"] * 4 * 4 / 3 * 1.2) + 256 * MIB
 
 
-def preflight(source: Path, output: Path) -> dict:
+def preflight(source: Path, output: Path, *, index_base=1, image: Path | None = None) -> dict:
     if not source.is_dir():
-        raise FileNotFoundError(f"Place the dataset's RGB_png folder here, then check again:\n{source}")
-    tiles = inventory(source, STRIDE)
+        raise FileNotFoundError(f"Download the dataset into the images folder, then check again:\n{source}")
+    tiles = inventory(source, STRIDE, index_base=index_base)
     extent = geometry(tiles)
+    if image is not None:
+        raster = inspect_raster(image)
+        if extent["width"] > raster["width"] or extent["height"] > raster["height"]:
+            raise ValueError("Source tile footprints extend outside the orthomosaic.")
+        extent = raster
     parent = output
     while not parent.exists():
         parent = parent.parent
-    required, free = estimate_bytes(extent), shutil.disk_usage(parent).free
+    required = MIB + len(tiles) * 1024 if image is not None else estimate_bytes(extent)
+    free = shutil.disk_usage(parent).free
     return dict(count=len(tiles), extent=extent, required_bytes=required, free_bytes=free,
                 enough_space=free >= required)
 
@@ -164,15 +171,25 @@ def validate_overlaps(tiles, staging: Path, progress: Progress) -> dict:
                 if mismatch:
                     raise ValueError(f"Overlapping pixels disagree: {other.path.name} and {tile.path.name}. "
                                      "Use tiles from the same unchanged orthophoto; no map was published.")
+    write_index(tiles, staging)
+    return dict(pairs=pairs, compared_pixels=compared, mismatched_pixels=0, peak_source_cache_bytes=peak)
+
+
+def write_index(tiles, staging: Path) -> None:
     with (staging / "tile_index.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(["filename", "row", "column", "x", "y", "width", "height", "source_file_sha256"])
         for tile in tiles:
             writer.writerow([tile.path.name, tile.row, tile.col, tile.x, tile.y, tile.width, tile.height, tile.sha256])
-    return dict(pairs=pairs, compared_pixels=compared, mismatched_pixels=0, peak_source_cache_bytes=peak)
 
 
-def build(source: Path, output: Path, progress: Progress | None = None) -> dict:
+def raster_snapshot(image: Path) -> dict:
+    stat = image.stat()
+    return dict(bytes=stat.st_size, mtime_ns=stat.st_mtime_ns)
+
+
+def build(source: Path, output: Path, progress: Progress | None = None, *,
+          index_base=1, image: Path | None = None) -> dict:
     source, output = source.resolve(), output.resolve()
     progress = progress or Progress()
     started = time.monotonic()
@@ -185,31 +202,52 @@ def build(source: Path, output: Path, progress: Progress | None = None) -> dict:
         try:
             progress("inventory")
             before = source_snapshot(source)
-            info = preflight(source, output)
+            info = preflight(source, output, index_base=index_base, image=image)
             if not info["enough_space"]:
                 raise OSError("Not enough free disk space for the estimated map and overviews. Free space and try again.")
-            tiles = inventory(source, STRIDE)
+            tiles = inventory(source, STRIDE, index_base=index_base)
             build_id = uuid.uuid4().hex
             staging = output / (".staging-" + build_id)
             staging.mkdir()
-            overlap = validate_overlaps(tiles, staging, progress)
-            destination = staging / "rgb_world_map.tif"
-            with warnings.catch_warnings(), rasterio.Env(
-                GDAL_TIFF_INTERNAL_MASK=True, GDAL_CACHEMAX=128 * MIB, GDAL_NUM_THREADS="2",
-                COMPRESS_OVERVIEW="DEFLATE", PREDICTOR_OVERVIEW="2", BIGTIFF_OVERVIEW="YES",
-            ):
-                warnings.simplefilter("ignore", NotGeoreferencedWarning)
-                build_mosaic(tiles, destination, info["extent"], STRIDE, progress, build_id)
-                verification = verify_mosaic(tiles, destination, info["extent"], progress)
+            external = None
+            if image is not None:
+                destination = image.resolve(strict=True)
+                external = raster_snapshot(destination)
+                try:
+                    reference = os.path.relpath(destination, output)
+                except ValueError:  # Sources on a different Windows drive cannot use a relative path.
+                    reference = str(destination)
+                write_index(tiles, staging)
+                overlap = None  # Display PNGs are individually stretched; the TIFF is authoritative.
+                progress("verifying", 0, 1)
+                with rasterio.open(destination) as dataset:
+                    dataset.read(window=rasterio.windows.Window(0, 0, 1, 1))
+                verification = dict(internal_overviews=info["extent"]["internal_overviews"])
+                if raster_snapshot(destination) != external:
+                    raise RuntimeError("The source orthomosaic changed during preparation.")
+                external = dict(external, path=reference)
+            else:
+                overlap = validate_overlaps(tiles, staging, progress)
+                destination = staging / "rgb_world_map.tif"
+                with warnings.catch_warnings(), rasterio.Env(
+                    GDAL_TIFF_INTERNAL_MASK=True, GDAL_CACHEMAX=128 * MIB, GDAL_NUM_THREADS="2",
+                    COMPRESS_OVERVIEW="DEFLATE", PREDICTOR_OVERVIEW="2", BIGTIFF_OVERVIEW="YES",
+                ):
+                    warnings.simplefilter("ignore", NotGeoreferencedWarning)
+                    build_mosaic(tiles, destination, info["extent"], STRIDE, progress, build_id)
+                    verification = verify_mosaic(tiles, destination, info["extent"], progress)
             if source_snapshot(source) != before:
                 raise RuntimeError("Source files changed during creation. Keep the dataset unchanged and try again.")
             progress("publishing")
             report = dict(schema=SCHEMA, status="complete", app_version=__version__, build_id=build_id,
                           source_count=len(tiles), sources=before, extent=info["extent"], stride=STRIDE,
+                          index_base=index_base,
                           overlap_validation=overlap, verification=verification,
                           tiff_bytes=destination.stat().st_size, index_sha256=sha256(staging / "tile_index.csv"),
                           elapsed_seconds=round(time.monotonic()-started, 3),
                           resource_limits=dict(gdal_cache_mib=128, source_cache_mib=64, compression_threads=2))
+            if external is not None:
+                report["source_raster"] = external
             atomic_json(staging / "manifest.json", report)
             generation = "build-" + build_id
             staging.rename(output / generation)
@@ -222,7 +260,7 @@ def build(source: Path, output: Path, progress: Progress | None = None) -> dict:
                 shutil.rmtree(staging)
 
 
-def current_map(output: Path, source: Path | None = None) -> dict:
+def current_map(output: Path, source: Path | None = None, *, image: Path | None = None) -> dict:
     """Read small metadata and TIFF headers; never hash all source PNGs at startup."""
     pointer = json.loads((output / "current.json").read_text(encoding="utf-8"))
     if pointer.get("schema") != SCHEMA:
@@ -234,17 +272,20 @@ def current_map(output: Path, source: Path | None = None) -> dict:
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     if manifest.get("schema") != SCHEMA or manifest.get("status") != "complete":
         raise ValueError("The map was not completed by a supported version. Rebuild it.")
-    image, index = folder / "rgb_world_map.tif", folder / "tile_index.csv"
-    if image.stat().st_size != manifest["tiff_bytes"] or sha256(index) != manifest["index_sha256"]:
+    external = manifest.get("source_raster")
+    image = ((image or output / external["path"]).resolve() if external else folder / "rgb_world_map.tif")
+    index = folder / "tile_index.csv"
+    if (not external and image.stat().st_size != manifest["tiff_bytes"]) or sha256(index) != manifest["index_sha256"]:
         raise ValueError("The map or tile index is incomplete or has changed. Rebuild it.")
     from .mosaic_viewer import TileIndex
-    tiles = TileIndex(index)
+    extent = (manifest["extent"]["width"], manifest["extent"]["height"])
+    tiles = TileIndex(index, extent=extent)
     with warnings.catch_warnings(), rasterio.Env(GDAL_CACHEMAX=8 * MIB):
         warnings.simplefilter("ignore", NotGeoreferencedWarning)
         with rasterio.open(image) as dataset:
             if ((dataset.width, dataset.height) != (tiles.width, tiles.height)
-                or dataset.count != 3 or dataset.dtypes != ("uint8",)*3
-                or dataset.tags().get("aerial_atlas_build") != manifest["build_id"]
+                or (not external and (dataset.count != 3 or dataset.dtypes != ("uint8",)*3
+                    or dataset.tags().get("aerial_atlas_build") != manifest["build_id"]))
                 or len(tiles.tiles) != manifest["source_count"]
                 or [dataset.width, dataset.height] != [manifest["extent"]["width"], manifest["extent"]["height"]]
                 or dataset.overviews(1) != manifest["verification"]["internal_overviews"]):
@@ -252,4 +293,7 @@ def current_map(output: Path, source: Path | None = None) -> dict:
             dataset.read(window=rasterio.windows.Window(0, 0, 1, 1))
     snapshot = source_snapshot(source) if source is not None and source.is_dir() else []
     changed = bool(snapshot) and snapshot != manifest["sources"]
+    if external:
+        inspect_raster(image)
+        changed = changed or raster_snapshot(image) != {key: external[key] for key in ("bytes", "mtime_ns")}
     return dict(image=image, index=index, manifest=manifest, changed=changed)
