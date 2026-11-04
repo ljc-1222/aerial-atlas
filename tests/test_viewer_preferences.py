@@ -46,6 +46,20 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(self.store.load(), original)
         self.assertFalse(list(self.store.path.parent.glob("*.tmp")))
 
+    def test_survey_views_roundtrip_and_reject_unknown_or_invalid_entries(self):
+        view = dict(state=dict(cx=10, cy=20, scale=1, selected="1150618_tile_0_0.png", row=0, query=""),
+                    map_key="survey-map", extent=[2048, 3072])
+        preferences = Preferences(last_dataset="1150618", dataset_views={"1150618": view})
+        self.store.save(preferences)
+        self.assertEqual(self.store.load(), preferences)
+        data = asdict(preferences)
+        data["last_dataset"] = "../other"
+        data["dataset_views"].update({"../other": view, "1150806": {"bad": True}})
+        self.store.path.write_text(json.dumps(data), encoding="utf-8")
+        restored = self.store.load()
+        self.assertEqual(restored.last_dataset, "1150427")
+        self.assertEqual(restored.dataset_views, {"1150618": view})
+
     def test_translations_have_matching_keys_and_format_fields(self):
         chinese, english = STRINGS["zh-TW"], STRINGS["en"]
         self.assertEqual(chinese.keys(), english.keys())

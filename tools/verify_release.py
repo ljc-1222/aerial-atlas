@@ -10,6 +10,7 @@ from zipfile import ZipFile
 from PIL import Image
 from aerial_atlas import __version__
 from aerial_atlas.mosaic import sha256
+from aerial_atlas.paths import source_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -53,13 +54,15 @@ def verify():
             env.pop(key, None)
         exe = app / "AerialAtlas.exe"
         project = work / "synthetic project"
-        subprocess.run([str(exe), "--project-dir", str(project), "--demo", "--build"],
+        command = [str(exe), "--project-dir", str(project), "--dataset", "1150427",
+                   "--settings-path", str(work / "settings.json")]
+        subprocess.run([*command, "--demo", "--build"],
                        cwd=work, env=env, check=True, timeout=120)
         result = work / "runtime-check.json"
-        subprocess.run([str(exe), "--project-dir", str(project), "--tile", "2_2",
+        subprocess.run([*command, "--tile", "2_2",
                         "--self-test-report", str(result)], cwd=work, env=env, check=True, timeout=60)
         report = json.loads(result.read_text())
-        with Image.open(project / "images/1150427/RGB_png/demo_02_02.png") as image:
+        with Image.open(source_dir(project) / "demo_02_02.png") as image:
             expected_rgb = hashlib.sha256(image.tobytes()).hexdigest()
         if not (report["status"] == "passed" and report["frozen"] and report["tkinter"]
                 and report["tiles"] == 14 and report["reference_rgb_sha256"] == expected_rgb):

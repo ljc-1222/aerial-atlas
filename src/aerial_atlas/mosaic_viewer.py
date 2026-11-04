@@ -451,6 +451,15 @@ class MosaicViewer(ViewerUI):
         self.root, self.index, self.args = root, index, args
         self.settings_store = SettingsStore(getattr(args, "settings_path", None))
         self.preferences = self.settings_store.load()
+        self.dataset_id = getattr(args, "dataset", None) or "1150427"
+        saved = self.preferences.dataset_views.get(self.dataset_id)
+        if saved:
+            self.preferences.last_view = saved
+            self.preferences.last_tile = saved["state"]["selected"]
+        elif self.preferences.last_dataset != self.dataset_id:
+            self.preferences.last_view = None
+            self.preferences.last_tile = ""
+        self.preferences.last_dataset = self.dataset_id
         if getattr(args, "restored_view", None):
             self.preferences.last_view = args.restored_view
         self.map_key = getattr(args, "map_identity", None) or str(image_path.resolve()).casefold()
@@ -1015,7 +1024,7 @@ class MosaicViewer(ViewerUI):
             self._commit_navigation()
         self._request_paint()
 
-    def close(self) -> None:
+    def close(self, *, destroy_root=True) -> None:
         if self.closed:
             return
         for name in ("render_after", "filter_after", "paint_after", "settle_after", "poll_after", "startup_after"):
@@ -1033,12 +1042,14 @@ class MosaicViewer(ViewerUI):
             self.preferences.last_tile = self.selected.filename if self.selected else ""
             self.preferences.last_view = dict(state=self.capture_view().to_dict(), map_key=self.map_key,
                                               extent=[self.index.width, self.index.height])
+            self.preferences.dataset_views[self.dataset_id] = self.preferences.last_view
         self._save_preferences()
         self.close_settings()
         self.close_info()
         self.closed = True
         self.worker.stop()
-        self.root.withdraw()
-        self.worker.join(timeout=3)
-        self.root.destroy()
+        if destroy_root:
+            self.root.withdraw()
+            self.worker.join(timeout=3)
+            self.root.destroy()
 

@@ -20,12 +20,16 @@ def default_project() -> Path:
     return Path.cwd().resolve()
 
 
-def source_dir(project: Path) -> Path:
-    return project / "images" / DATASET / "RGB_png"
+def source_dir(project: Path, dataset=DATASET, data_root: Path | None = None) -> Path:
+    from .datasets import find_dataset, resolve_data_root
+    return find_dataset(resolve_data_root(project, data_root), dataset).tiles
 
 
-def output_dir(project: Path) -> Path:
-    return project / "generated" / DATASET
+def output_dir(project: Path, dataset=DATASET) -> Path:
+    from .datasets import DATASET_IDS
+    if dataset not in DATASET_IDS:
+        raise ValueError(f"Unknown dataset: {dataset}")
+    return project / "generated" / dataset
 
 
 def atomic_json(path: Path, value: dict) -> None:

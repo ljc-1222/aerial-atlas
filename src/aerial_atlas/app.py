@@ -12,6 +12,7 @@ import sys
 
 from . import __version__
 from .paths import default_project, source_dir, output_dir, atomic_json
+from .datasets import DATASET_IDS, find_dataset, prepare_downloads, resolve_data_root
 
 
 def configure_logging(worker=False):
@@ -29,7 +30,9 @@ def parser():
     result = argparse.ArgumentParser(description="Aerial Atlas: local tiles and world map")
     result.add_argument("--version", action="version", version=f"Aerial Atlas {__version__}")
     result.add_argument("--project-dir", type=Path, default=default_project(), help="Root containing images/ and generated/")
-    result.add_argument("--source", type=Path, help="Override the source RGB_png directory")
+    result.add_argument("--dataset", choices=DATASET_IDS, help="Survey to open (defaults to the last selection)")
+    result.add_argument("--data-dir", type=Path, help="Folder containing downloaded survey files or ZIPs")
+    result.add_argument("--source", type=Path, help="Override the source tile directory")
     result.add_argument("--build", action="store_true", help="Create and verify the map without opening the GUI")
     result.add_argument("--demo", action="store_true", help="Create synthetic example tiles (never overwrites existing sources)")
     result.add_argument("--tile", help="Initial filename or row_column to locate")
@@ -51,7 +54,8 @@ def self_test(args, output):
     from .mosaic_viewer import TileIndex, RenderRequest, render_region
     import rasterio
     info = current_map(output)
-    index = TileIndex(info["index"])
+    extent = info["manifest"]["extent"]
+    index = TileIndex(info["index"], extent=(extent["width"], extent["height"]))
     tile = index.find(args.tile) if args.tile else index.tiles[0]
     if tile is None:
         raise ValueError("Requested self-test tile was not found")
@@ -76,8 +80,13 @@ def main(argv=None):
             and 10_000 <= args.max_render_pixels <= 8_000_000):
         argument_parser.error("Cache limits must be 0..512 / 1..512 MiB; render pixels 10000..8000000")
     args.project_dir = args.project_dir.resolve()
-    source = (args.source or source_dir(args.project_dir)).resolve()
-    output = output_dir(args.project_dir)
+    from .viewer_preferences import SettingsStore
+    requested_dataset = args.dataset
+    args.dataset_explicit = bool(requested_dataset or args.source or args.image)
+    args.dataset = args.dataset or ("1150427" if args.source or args.demo else SettingsStore(args.settings_path).load().last_dataset)
+    args.data_dir = resolve_data_root(args.project_dir, args.data_dir)
+    source = (args.source or args.data_dir / args.dataset / "tiles_png_1024").resolve()
+    output = output_dir(args.project_dir, args.dataset)
     # Apply before NumPy/GDAL import, including in headless build subprocesses.
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -85,12 +94,26 @@ def main(argv=None):
         log_dir = configure_logging(args.build)
         if args.demo:
             from .demo import create_demo
+            source = (args.source or source_dir(args.project_dir, args.dataset, args.data_dir)).resolve()
             create_demo(source)
         if args.build:
             from .mosaic import build, Progress, BuildCancelled
             progress = Progress(args.progress_file, args.cancel_file)
             try:
-                report = build(source, output, progress)
+                prepare_downloads(args.data_dir, progress)
+                dataset = find_dataset(args.data_dir, args.dataset)
+                if not requested_dataset and not args.source and not dataset.tiles.is_dir():
+                    for id in DATASET_IDS:
+                        candidate = find_dataset(args.data_dir, id)
+                        if candidate.tiles.is_dir():
+                            dataset = candidate
+                            args.dataset = id
+                            break
+                source = (args.source or dataset.tiles).resolve()
+                output = output_dir(args.project_dir, args.dataset)
+                if dataset.index_base == 0 and dataset.image is None:
+                    raise FileNotFoundError(f"Download {dataset.id}_input_orthomosaic-001.tif together with its tile ZIPs.")
+                report = build(source, output, progress, index_base=dataset.index_base, image=dataset.image)
                 if sys.stdout is not None:
                     print(f"Created {report['source_count']} tiles in {report['elapsed_seconds']:.1f}s")
                 return 0

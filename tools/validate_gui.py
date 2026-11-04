@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tkinter as tk
 
@@ -14,6 +15,7 @@ from aerial_atlas.app import parser
 from aerial_atlas.demo import create_demo
 from aerial_atlas.paths import output_dir, source_dir, atomic_json
 from aerial_atlas.startup import Startup
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -42,6 +44,117 @@ def capture(root,path):
         except OSError:
             if attempt==2: raise
             time.sleep(.1)
+
+
+def check_surveys(project, errors):
+    sys.path.insert(0, str(ROOT / "tests"))
+    from support import survey_downloads
+    for id in ("1150618", "1150806"):
+        survey_downloads(project, id)
+    args = parser().parse_args(["--project-dir", str(project), "--settings-path", str(project / "settings.json"),
+                                "--dataset", "1150427"])
+    root = tk.Tk()
+    root.report_callback_exception = lambda *error: errors.append(str(error))
+    app = Startup(root, args, source_dir(project), output_dir(project), project / "logs")
+
+    def switch(id):
+        previous = args.switch_dataset.__self__
+        previous.viewer.survey_combo.current(("1150427", "1150618", "1150806").index(id))
+        previous.viewer.survey_combo.event_generate("<<ComboboxSelected>>")
+        pump(root, lambda: args.switch_dataset.__self__ is not previous)
+        current = args.switch_dataset.__self__
+        pump(root, lambda: not current.scan_running)
+        if not current.opened:
+            assert current.message_key == "ready", current.message_values
+            current.start_build()
+        pump(root, lambda: current.opened and current.viewer.detail_updates > 0)
+        assert previous.viewer.closed and not previous.viewer.worker.is_alive()
+        return current.viewer
+
+    try:
+        pump(root, lambda: app.opened and app.viewer.detail_updates > 0)
+        app.viewer.locate_text("2_2")
+        april = app.viewer.capture_view()
+        june = switch("1150618")
+        assert (june.index.width, june.index.height) == (1536, 1280)
+        june.locate_text("0_1")
+        june.row_combo.current(1)
+        june._row_changed()
+        expected = june.capture_view()
+        august = switch("1150806")
+        assert august.selected is None, "Selection leaked between surveys"
+        august.locate_text("0_0")
+        restored = switch("1150618")
+        pump(root, lambda: restored.selected is not None)
+        assert restored.capture_view().equivalent(expected)
+        restored = switch("1150427")
+        pump(root, lambda: restored.selected is not None)
+        assert restored.capture_view().equivalent(april)
+    finally:
+        try:
+            active = args.switch_dataset.__self__
+            if active.opened:
+                active.viewer.close()
+            else:
+                active.close()
+                pump(root, lambda: not active.scan_running)
+        except tk.TclError:
+            pass
+
+
+def check_reopen_and_import_close(errors):
+    from support import survey_downloads
+    from aerial_atlas.datasets import find_dataset, prepare_downloads
+    from aerial_atlas.mosaic import build
+    with tempfile.TemporaryDirectory(prefix="atlas external ") as directory:
+        work = Path(directory)
+        project = work / "app"
+        survey_downloads(work / "downloads")
+        downloads = work / "downloads/images"
+        prepare_downloads(downloads)
+        survey = find_dataset(downloads, "1150618")
+        build(survey.tiles, output_dir(project, survey.id), index_base=0, image=survey.image)
+        args = parser().parse_args(["--project-dir", str(project), "--dataset", survey.id,
+                                    "--settings-path", str(work / "settings.json")])
+        root = tk.Tk()
+        root.report_callback_exception = lambda *error: errors.append(str(error))
+        app = Startup(root, args, source_dir(project, survey.id), output_dir(project, survey.id), work)
+        try:
+            pump(root, lambda: app.opened and app.viewer.detail_updates > 0)
+            assert len(app.viewer.index.tiles) == 2
+            assert not find_dataset(project / "images", survey.id).image
+        finally:
+            if app.opened:
+                app.viewer.close()
+            else:
+                app.close()
+
+        started, release, cleaned = threading.Event(), threading.Event(), threading.Event()
+
+        def importing(folder, progress):
+            started.set()
+            try:
+                assert release.wait(5), "Import test was not released"
+                progress("importing", 0, 1, "download.zip")
+            finally:
+                cleaned.set()
+
+        root = tk.Tk()
+        root.report_callback_exception = lambda *error: errors.append(str(error))
+        with patch("aerial_atlas.startup.prepare_downloads", side_effect=importing):
+            app = Startup(root, args, source_dir(project, survey.id), output_dir(project, survey.id), work)
+            try:
+                pump(root, started.is_set)
+                app.close()
+                root.after_cancel(app.poll_job)
+                app.poll_job = None
+                app.poll()
+                assert root.winfo_exists() and app.scan_running and not cleaned.is_set()
+                release.set()
+                pump(root, lambda: not app.scan_running)
+                assert cleaned.is_set(), "Window closed before importer cleanup"
+            finally:
+                release.set()
 
 
 def main():
@@ -180,8 +293,13 @@ def main():
                 if root.winfo_exists(): app.close(); root.update()
             except tk.TclError: pass
         assert not errors,errors
+        check_surveys(project, errors)
+        check_reopen_and_import_close(errors)
+        assert not errors, errors
     atomic_json(ROOT/"validation/gui.json",dict(status="passed",missing_data=True,preparation_themes=True,
-        high_dpi_layout=True,native_call_cancelled=True,gui_build=True,lookup_context=1.5,settings=True,exact_view_restored=True,callback_errors=errors))
+        high_dpi_layout=True,native_call_cancelled=True,gui_build=True,lookup_context=1.5,settings=True,
+        exact_view_restored=True,survey_switching=True,download_import=True,
+        external_map_reopened=True,import_close_waits=True,callback_errors=errors))
     print("GUI checks passed")
 
 

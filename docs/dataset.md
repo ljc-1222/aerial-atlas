@@ -1,33 +1,81 @@
 # Dataset requirements
 
-Place source tiles in `images/1150427/RGB_png/`, relative to the extracted
-application folder or source project root. Only the RGB PNGs are needed; training
-splits and masks are not used by the viewer.
+The private datasets are supplied separately. Download their original ZIPs and
+TIFFs into `images/`, or select the folder where they were downloaded in the app.
+Preparation automatically extracts recognized imagery. Original ZIPs are kept,
+existing different files are never overwritten, and interrupted imports can be
+retried. Training splits, annotation JSON and semantic masks are left alone.
 
-## Input format
+## Shared layout
 
-- RGB PNG, 8 bits per channel.
-- Names follow `<prefix>_<row>_<column>.png`, with positive row and column numbers
-  starting at 1. Zero padding is allowed; PNG extensions are case-insensitive.
-- All tiles share one prefix, with no duplicate row/column positions.
-- Each dimension is greater than 512 and at most 1024 pixels. Cropped outer tiles
-  and missing grid cells are supported.
-- Grid spacing is **512 pixels**: `x=(column-1)*512`, `y=(row-1)*512`.
-- Pixels in horizontal, vertical and diagonal overlaps must be identical.
+```text
+images/
+  1150427/
+    tiles_png_1024/20260427_nodata_<row>_<column>.png
+  1150618/
+    tiles_png_1024/1150618_tile_<row>_<column>.png
+    1150618_input_orthomosaic-001.tif
+  1150806/
+    tiles_png_1024/1150806_tile_<row>_<column>.png
+    1150806_input_orthomosaic-001.tif
+```
 
-The application places tiles without warping or blending. Conflicting overlaps
-stop creation instead of silently choosing a source. Arbitrary aerial photos or
-tiles from another grid require a different stitching workflow.
+The TIFF may also remain directly in the selected download folder. The app
+imports ZIPs directly in that folder or a date folder. It does not unpack ZIPs
+inside `archives/` or recursively search unrelated folders. Completed imports
+are recorded in `.imports.json` so later launches do not decode them again.
 
-## Map files
+An existing `1150427/RGB_png/` folder is renamed to `tiles_png_1024/` automatically.
+Its image filenames, bytes and cropped edge sizes are preserved. If both tile
+folders contain files, preparation stops rather than choosing an incomplete
+set or overwriting images. ZIPs may contain April tiles under `RGB_png/`,
+`image/RGB_png/`, or `1150427/RGB_png/`; standard date-prefixed layouts are also
+recognized.
 
-The generated map is stored under `generated/1150427/` as a tiled, lossless
-BigTIFF with internal zoom levels and a coverage mask, alongside the tile index.
-Black source pixels remain valid; uncovered areas are masked. Coordinates use
-the upper-left image origin, X increasing right and Y increasing down. No GPS,
-CRS, physical scale or north orientation is inferred.
+## Tile geometry and maps
 
-Keep the generated folder together when moving the application; do not mix files
-from separate builds. To start over or reclaim all generated-map space, close
-the application and remove `generated/1150427/` **only if you still have the
-original tiles**. The next launch can recreate the map from those sources.
+| Survey | Native numbering | Placement | Main image |
+|---|---|---|---|
+| `1150427` | Starts at 1 | `x=(column-1)*512`, `y=(row-1)*512` | Reconstructed RGB BigTIFF |
+| `1150618` | Starts at 0 | `x=column*512`, `y=row*512` | Supplied source TIFF |
+| `1150806` | Starts at 0 | `x=column*512`, `y=row*512` | Supplied source TIFF |
+
+Tiles are RGB PNGs, 8 bits per channel, with a common filename prefix and unique
+row/column pairs. Dimensions must be greater than 512 and at most 1024; April's
+cropped edges are supported without padding. A full 1024-pixel tile overlaps its
+neighbor by 512 pixels. Missing grid cells are allowed.
+
+April is reconstructed without warping or blending. All horizontal, vertical
+and diagonal overlap pixels must agree. Its generated TIFF has a coverage mask
+and internal zoom levels. Black source pixels remain valid, and no geographic
+CRS is invented.
+
+June and August PNGs have individual display stretches, so their overlapping
+colors need not agree. The app builds a small tile index and reads the supplied
+8-band uint16 TIFF instead of stitching these PNGs. Display uses RGB bands 1-3
+on one fixed 0-65535 scale and band 8 as validity. Other bands and georeferencing
+stay in the original TIFF. Supplied PNG colors may differ from the full map.
+The raster's full extent is retained, including edges with no exported PNG tile.
+The labeled overview PNG is not used as the base map.
+
+## Generated files and command line
+
+Each survey has its own `generated/<survey>/` directory. A verified generation
+contains the tile index and manifest; April also contains its reconstructed map.
+Publication is atomic, and cancellation leaves the previous generation intact.
+The existing April map can be reused after the tile directory is adapted.
+
+For scripted use, run from a source checkout:
+
+```powershell
+.\.venv\Scripts\python.exe -m aerial_atlas --dataset 1150618 --data-dir "D:\survey-downloads" --build
+```
+
+`--data-dir` selects the folder containing the downloads, not `tiles_png_1024`.
+For development, an empty project `images/` directory also recognizes a sibling
+`../images/` containing the surveys. The data and generated maps stay out of Git.
+
+Keep source TIFFs available when opening June or August. Move `images/` and
+`generated/` together to preserve relative TIFF references, or select the new
+download folder. Views use image pixels; switching dates does not perform
+geographic alignment or cross-date change detection.

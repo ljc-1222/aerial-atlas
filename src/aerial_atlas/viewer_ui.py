@@ -8,6 +8,7 @@ import time
 
 from .viewer_preferences import THEMES, STRINGS, map_background, system_theme
 from . import __version__
+from .datasets import DATASET_IDS
 
 
 class ViewerUI:
@@ -46,6 +47,14 @@ class ViewerUI:
         self.mark = tk.Canvas(header, width=25, height=28, highlightthickness=0)
         self.mark.pack(side="left", padx=(0, 10))
         self._text(header, "app", font=("Microsoft JhengHei UI", 13, "bold")).pack(side="left")
+        if callable(getattr(self.args, "switch_dataset", None)):
+            self._text(header, "survey", style="Muted.TLabel").pack(side="left", padx=(24, 8))
+            labels = [f"{int(id[:3])+1911}-{id[3:5]}-{id[5:]}" for id in DATASET_IDS]
+            self.survey_combo = ttk.Combobox(header, values=labels, state="readonly", width=14)
+            self.survey_combo.current(DATASET_IDS.index(self.dataset_id))
+            self.survey_combo.pack(side="left")
+            self.survey_combo.bind("<<ComboboxSelected>>",
+                                   lambda event: self.args.switch_dataset(DATASET_IDS[self.survey_combo.current()]))
         self.help_menu = tk.Menu(root, tearoff=False)
         self.view_menu = tk.Menu(root, tearoff=False)
         self.tile_menu = tk.Menu(root, tearoff=False)

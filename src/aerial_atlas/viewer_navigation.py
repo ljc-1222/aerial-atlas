@@ -36,7 +36,7 @@ class ViewState:
         selected, row, query = data.get("selected", ""), data.get("row"), data.get("query", "")
         if not isinstance(selected, str) or len(selected) > 256 or not isinstance(query, str):
             return None
-        if row is not None and (type(row) is not int or not 1 <= row <= 100000):
+        if row is not None and (type(row) is not int or not 0 <= row <= 100000):
             return None
         return cls(float(cx), float(cy), float(scale), selected, row, query[:512])
 

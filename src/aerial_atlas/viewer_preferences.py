@@ -1,12 +1,13 @@
 """Small, validated user preferences and semantic UI resources (stdlib only)."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
 import tempfile
 import csv
 from .viewer_navigation import validated_saved_view
+from .datasets import DATASET_IDS
 
 
 THEMES = {
@@ -28,7 +29,7 @@ THEMES = {
 
 STRINGS = {
     "zh-TW": {
-        "app": "航測圖台", "view": "檢視", "settings": "設定", "help": "說明",
+        "app": "航測圖台", "view": "檢視", "settings": "設定", "help": "說明", "survey": "航次",
         "search": "圖幅瀏覽", "search_hint": "搜尋編號或檔名，例如 30_35", "locate": "定位",
         "tile_ids": "編號", "row_filter": "依列瀏覽", "all_tiles": "全部圖幅",
         "row_option": "第 {row:02} 列", "previous_tile": "‹ 上一張", "next_tile": "下一張 ›",
@@ -65,7 +66,7 @@ STRINGS = {
         "fullscreen": "全螢幕", "exit_fullscreen": "離開全螢幕",
     },
     "en": {
-        "app": "Aerial Atlas", "view": "View", "settings": "Settings", "help": "Help",
+        "app": "Aerial Atlas", "view": "View", "settings": "Settings", "help": "Help", "survey": "Survey",
         "search": "Browse tiles", "search_hint": "Search ID or filename, e.g. 30_35", "locate": "Locate",
         "tile_ids": "Tile ID", "row_filter": "Browse row", "all_tiles": "All tiles",
         "row_option": "Row {row:02}", "previous_tile": "‹ Previous", "next_tile": "Next ›",
@@ -115,6 +116,8 @@ class Preferences:
     remember_view: bool = True
     last_tile: str = ""
     last_view: dict | None = None
+    last_dataset: str = "1150427"
+    dataset_views: dict = field(default_factory=dict)
     window_width: int = 1480
     window_height: int = 940
 
@@ -143,6 +146,13 @@ class SettingsStore:
         if isinstance(data.get("last_tile"), str) and len(data["last_tile"]) < 256:
             prefs.last_tile = data["last_tile"]
         prefs.last_view = validated_saved_view(data.get("last_view"))
+        if data.get("last_dataset") in DATASET_IDS:
+            prefs.last_dataset = data["last_dataset"]
+        if isinstance(data.get("dataset_views"), dict):
+            for id in DATASET_IDS:
+                view = validated_saved_view(data["dataset_views"].get(id))
+                if view:
+                    prefs.dataset_views[id] = view
         return prefs
 
     def save(self, prefs: Preferences) -> None:

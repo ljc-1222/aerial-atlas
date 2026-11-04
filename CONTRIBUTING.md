@@ -10,8 +10,10 @@ py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe -m aerial_atlas
 ```
 
-For a source checkout, place the dataset in `images/1150427/RGB_png/` under the
-project root. Dataset files and generated maps must stay out of Git.
+For a source checkout, download the survey ZIPs and TIFFs into `images/`, or use
+`--data-dir` to select their download folder. The app prepares the layout without
+renaming April's original RGB files. See [dataset requirements](docs/dataset.md).
+Dataset files and generated maps must stay out of Git.
 
 ## Tests and changes
 
@@ -25,10 +27,11 @@ coverage for behavior changes, especially pixel-exact reconstruction, tile
 location and background rendering. Keep changes focused and describe their
 effect and validation in the pull request.
 
-Application code lives in `src/aerial_atlas/`: `mosaic` and `reconstruction` build
-the map, `startup` handles first use, and `mosaic_viewer` with `viewer_*` provides
-the viewer. Preserve bounded background work and publish a generated map only
-after verification succeeds.
+Application code lives in `src/aerial_atlas/`: `datasets` imports downloads,
+`mosaic` and `reconstruction` prepare maps, `raster` handles display reads,
+`startup` handles first use, and `mosaic_viewer` with `viewer_*` provides the
+viewer. Preserve bounded background work and publish a generated map only after
+verification succeeds.
 
 ## Build a Windows package
 
